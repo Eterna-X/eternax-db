@@ -22,7 +22,8 @@ eternax:
 
 spring:
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/${eternax.db.name}}
+    # DB_URL wins; otherwise built from DB_HOST, DB_PORT and DB_NAME (the service's own database by default)
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:${eternax.db.name}}}
     username: ${DB_USER}
     password: ${DB_PASSWORD}
     hikari:

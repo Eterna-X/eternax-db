@@ -68,8 +68,8 @@ At startup `DatabaseSettingsLoader` looks up the service's name, sets `eternax.d
 database (ingestion-service gets `ingestion`) and adds the file. A service missing from the map
 stops at startup with a message saying where to add it.
 
-The file is the lowest-precedence source. It holds no user name or password: set `DB_URL` (optional),
-`DB_USER` and `DB_PASSWORD` in the environment (docker-compose locally, Kubernetes secrets in a cluster), or on a
+The file is the lowest-precedence source. It holds no user name or password: set `DB_USER` and `DB_PASSWORD` and either `DB_URL` or
+`DB_HOST` / `DB_PORT` / `DB_NAME` (optional; default localhost:5432 and the service's own database) in the environment (docker-compose locally, Kubernetes secrets in a cluster), or on a
 developer machine in a git-ignored `.env` file in the service's folder (copy `.env.example`). Precedence: real
 environment variables, then `.env`, then `database.yml`; anything the service sets itself in its application.yml
 overrides all of them. A service that has no `DB_USER`/`DB_PASSWORD` stops at startup.

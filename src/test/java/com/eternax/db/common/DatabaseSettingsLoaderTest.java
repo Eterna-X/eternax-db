@@ -23,6 +23,10 @@ class DatabaseSettingsLoaderTest {
         props.putIfAbsent(
                 "eternax.db.env-file", "no-such.env"); // a developer's own .env must not leak in
         StandardEnvironment env = new StandardEnvironment();
+        // the machine's or CI's own DB_USER, DB_HOST... must not change what these tests expect
+        env.getPropertySources()
+                .remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME);
+        env.getPropertySources().remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME);
         env.getPropertySources().addFirst(new MapPropertySource("service", props));
         return env;
     }
@@ -120,6 +124,19 @@ class DatabaseSettingsLoaderTest {
                                         new StandardEnvironment(), new SpringApplication()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("spring.application.name");
+    }
+
+    @Test
+    void hostPortAndNameBuildTheUrlWhenThereIsNoDbUrl() {
+        StandardEnvironment env =
+                loaded("audit-service", Map.of("DB_HOST", "db.internal", "DB_PORT", "6000"));
+        assertThat(env.getProperty("spring.datasource.url"))
+                .isEqualTo("jdbc:postgresql://db.internal:6000/audit");
+
+        StandardEnvironment named =
+                loaded("audit-service", Map.of("DB_HOST", "db.internal", "DB_NAME", "eterna"));
+        assertThat(named.getProperty("spring.datasource.url"))
+                .isEqualTo("jdbc:postgresql://db.internal:5432/eterna");
     }
 
     @Test
