@@ -1,0 +1,33 @@
+# Database settings of every eternaSync service, in one place.
+#
+# At startup DatabaseSettingsLoader looks up the service's spring.application.name below, sets
+# eternax.db.name to its database, and adds this file with the lowest precedence. Everything the
+# service's environment sets (DB_URL, DB_USER, DB_PASSWORD, SPRING_FLYWAY_USER, ...) wins over it.
+# Values come from environment variables (docker-compose locally, Kubernetes secrets in a cluster);
+# the defaults after ':' are for a developer machine only. Never put a real password here.
+eternax:
+  db:
+    # spring.application.name -> database (same names as eternasync-deploy/init-databases.sql)
+    databases:
+      ingestion-service: ingestion
+      normalizer-service: normalizer
+      matching-worker: matching
+      orchestration-service: orchestration
+      exception-service: exceptions
+      adjustment-service: adjustments
+      audit-service: audit
+      closure-service: closure
+      auth-service: auth
+
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/${eternax.db.name}}
+    username: ${DB_USER:eternax}
+    password: ${DB_PASSWORD:eternax}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      connection-timeout: 5000
+  # db/<database> = the service's own tables (src/main/resources/db/<database>); db/platform = eternax-platform's
+  # (outbox, locks, idempotency). audit-service runs migrations as the table owner by setting
+  # SPRING_FLYWAY_USER / SPRING_FLYWAY_PASSWORD in its environment (AUD-07).
+  flyway.locations: classpath:db/${eternax.db.name},classpath:db/platform

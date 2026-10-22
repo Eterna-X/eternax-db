@@ -1,0 +1,9 @@
+com.eternax.db.ingestion.IngestionDbAutoConfiguration
+com.eternax.db.normalizer.NormalizerDbAutoConfiguration
+com.eternax.db.matching.MatchingDbAutoConfiguration
+com.eternax.db.orchestration.OrchestrationDbAutoConfiguration
+com.eternax.db.exception.ExceptionDbAutoConfiguration
+com.eternax.db.adjustment.AdjustmentDbAutoConfiguration
+com.eternax.db.audit.AuditDbAutoConfiguration
+com.eternax.db.closure.ClosureDbAutoConfiguration
+com.eternax.db.auth.AuthDbAutoConfiguration
