@@ -3,9 +3,12 @@ package com.eternax.db.common;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.SpringApplication;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
@@ -17,6 +20,8 @@ class DatabaseSettingsLoaderTest {
     private static StandardEnvironment service(String name, Map<String, Object> more) {
         Map<String, Object> props = new HashMap<>(more);
         props.put("spring.application.name", name);
+        props.putIfAbsent(
+                "eternax.db.env-file", "no-such.env"); // a developer's own .env must not leak in
         StandardEnvironment env = new StandardEnvironment();
         env.getPropertySources().addFirst(new MapPropertySource("service", props));
         return env;
@@ -115,5 +120,35 @@ class DatabaseSettingsLoaderTest {
                                         new StandardEnvironment(), new SpringApplication()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("spring.application.name");
+    }
+
+    @Test
+    void aDotenvFileSuppliesTheCredentials(@TempDir Path dir) throws Exception {
+        Path env = dir.resolve(".env");
+        Files.writeString(
+                env,
+                "# local\nDB_URL=jdbc:postgresql://localhost:5666/eterna\n"
+                        + "export DB_USER=\"me\"\nDB_PASSWORD='p=ss word'\n");
+
+        StandardEnvironment e =
+                loaded("audit-service", Map.of("eternax.db.env-file", env.toString()));
+
+        assertThat(e.getProperty("spring.datasource.url"))
+                .isEqualTo("jdbc:postgresql://localhost:5666/eterna");
+        assertThat(e.getProperty("spring.datasource.username")).isEqualTo("me");
+        assertThat(e.getProperty("spring.datasource.password")).isEqualTo("p=ss word");
+    }
+
+    @Test
+    void realEnvironmentVariablesBeatTheDotenvFile(@TempDir Path dir) throws Exception {
+        Path env = dir.resolve(".env");
+        Files.writeString(env, "DB_USER=from-file\n");
+
+        StandardEnvironment e =
+                loaded(
+                        "audit-service",
+                        Map.of("eternax.db.env-file", env.toString(), "DB_USER", "from-env"));
+
+        assertThat(e.getProperty("spring.datasource.username")).isEqualTo("from-env");
     }
 }

@@ -2,6 +2,10 @@ package com.eternax.db.common;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.boot.SpringApplication;
@@ -11,6 +15,7 @@ import org.springframework.core.Ordered;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.PropertySource;
+import org.springframework.core.env.SystemEnvironmentPropertySource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 
@@ -24,13 +29,20 @@ import org.springframework.core.io.Resource;
  *
  * <p>Everything is added with the lowest precedence. Environment variables ({@code DB_URL}, {@code
  * DB_USER}, {@code DB_PASSWORD}), the service's application.yml and test initializers all override
- * it. Real secrets never live in the file: it holds variable names and local development defaults
+ * it. The user name, password and any other secret are not in the file: it names the variables
  * only.
+ *
+ * <p>For a developer machine the variables can sit in a {@code .env} file (KEY=VALUE lines) in the
+ * service's working directory, or in the file named by {@code eternax.db.env-file}. Real
+ * environment variables win over it, and it wins over the defaults in {@code database.yml}. The
+ * file is git-ignored; {@code .env.example} lists the keys.
  */
 public class DatabaseSettingsLoader implements EnvironmentPostProcessor, Ordered {
 
     static final String SETTINGS = "eternax-db/database.yml";
     static final String SOURCE_NAME = "eternax-db";
+    static final String DOTENV_SOURCE_NAME = "eternax-db-dotenv";
+    static final String DEFAULT_ENV_FILE = ".env";
 
     private final YamlPropertySourceLoader yaml = new YamlPropertySourceLoader();
 
@@ -65,7 +77,48 @@ public class DatabaseSettingsLoader implements EnvironmentPostProcessor, Ordered
                 .addLast(
                         new MapPropertySource(
                                 SOURCE_NAME, Map.of("eternax.db.name", database.toString())));
+        readDotenv(environment.getProperty("eternax.db.env-file", DEFAULT_ENV_FILE))
+                .ifPresent(
+                        values ->
+                                environment
+                                        .getPropertySources()
+                                        .addLast(
+                                                new SystemEnvironmentPropertySource(
+                                                        DOTENV_SOURCE_NAME, values)));
         shared.forEach(environment.getPropertySources()::addLast);
+    }
+
+    /**
+     * KEY=VALUE lines; blank lines, # comments, a leading {@code export} and quotes are handled.
+     */
+    static java.util.Optional<Map<String, Object>> readDotenv(String file) {
+        Path path = Path.of(file);
+        if (!Files.isRegularFile(path)) {
+            return java.util.Optional.empty();
+        }
+        Map<String, Object> values = new LinkedHashMap<>();
+        try {
+            for (String raw : Files.readAllLines(path, StandardCharsets.UTF_8)) {
+                String line = raw.strip();
+                if (line.startsWith("export ")) {
+                    line = line.substring(7).strip();
+                }
+                int eq = line.indexOf('=');
+                if (line.isEmpty() || line.startsWith("#") || eq <= 0) {
+                    continue;
+                }
+                String value = line.substring(eq + 1).strip();
+                if (value.length() >= 2
+                        && (value.startsWith("\"") && value.endsWith("\"")
+                                || value.startsWith("'") && value.endsWith("'"))) {
+                    value = value.substring(1, value.length() - 1);
+                }
+                values.put(line.substring(0, eq).strip(), value);
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException("Cannot read " + path, e);
+        }
+        return java.util.Optional.of(values);
     }
 
     private List<PropertySource<?>> load() {
