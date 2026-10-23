@@ -155,6 +155,37 @@ public class CaseRepository {
                 .list();
     }
 
+    /** Every case of these references, in any state. */
+    public List<CaseRecord> byMatchKeys(
+            String tenantId, String rail, java.util.Collection<String> matchKeys) {
+        if (matchKeys.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.sql(
+                        "SELECT "
+                                + COLUMNS
+                                + " FROM reconciliation_case WHERE tenant_id=:t AND rail=:r AND"
+                                + " match_key IN (:k)")
+                .param("t", tenantId)
+                .param("r", rail)
+                .param("k", matchKeys)
+                .query(this::map)
+                .list();
+    }
+
+    /**
+     * The case no longer stands for its break (the records behind it were replaced): its break id
+     * gets the case id appended, so the same break found again raises a new case instead of
+     * resolving to this one. The case itself is kept.
+     */
+    public void releaseBreakId(String caseId) {
+        jdbc.sql(
+                        "UPDATE reconciliation_case SET break_id = break_id || '~' || case_id WHERE"
+                                + " case_id=:c AND position('~' in break_id) = 0")
+                .param("c", caseId)
+                .update();
+    }
+
     public Optional<CaseRecord> findByBreakId(String tenantId, String breakId) {
         return jdbc.sql(
                         "SELECT "

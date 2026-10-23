@@ -25,7 +25,48 @@ public record Definition(
         String createdBy,
         String approvedBy,
         Instant nextRunAt,
-        List<com.eternax.recon.domain.MatchingRule> rules) {
+        List<com.eternax.recon.domain.MatchingRule> rules,
+        Instant firstRunAt) {
+
+    /** A definition without a first-run time (the schedule, if any, is purely the cron). */
+    public Definition(
+            String definitionId,
+            int version,
+            String tenantId,
+            String name,
+            String rail,
+            List<String> requiredSources,
+            Duration waitWindow,
+            Duration compositeWindow,
+            long amountToleranceMinor,
+            boolean requireOppositeDirection,
+            String cronSchedule,
+            String timeZone,
+            Status status,
+            String createdBy,
+            String approvedBy,
+            Instant nextRunAt,
+            List<com.eternax.recon.domain.MatchingRule> rules) {
+        this(
+                definitionId,
+                version,
+                tenantId,
+                name,
+                rail,
+                requiredSources,
+                waitWindow,
+                compositeWindow,
+                amountToleranceMinor,
+                requireOppositeDirection,
+                cronSchedule,
+                timeZone,
+                status,
+                createdBy,
+                approvedBy,
+                nextRunAt,
+                rules,
+                null);
+    }
 
     /** A definition without explicit rules uses the default plan. */
     public Definition(
