@@ -96,6 +96,41 @@ public class BatchRepository {
                 .orElseThrow(() -> new EntityNotFoundException("IngestionBatch", batchId));
     }
 
+    /** An earlier upload of a feed that a new, different file replaces. */
+    public record EarlierFile(String batchId, BatchStatus status, String vaultLocation) {}
+
+    /**
+     * Earlier, different files of the same source and feed that are still in use: every batch of
+     * the feed except those of the file stored at {@code vaultLocation} and those already
+     * discarded.
+     */
+    public List<EarlierFile> earlierFilesOfFeed(
+            String tenantId, String sourceId, String feedId, String vaultLocation) {
+        return jdbc.sql(
+                        "SELECT batch_id, status, vault_location FROM ingestion_batch WHERE"
+                                + " tenant_id=:t AND source_id=:s AND feed_id=:f AND vault_location"
+                                + " <> :v AND status <> 'DISCARDED' ORDER BY created_at")
+                .param("t", tenantId)
+                .param("s", sourceId)
+                .param("f", feedId)
+                .param("v", vaultLocation)
+                .query(
+                        (rs, n) ->
+                                new EarlierFile(
+                                        rs.getString(1),
+                                        BatchStatus.valueOf(rs.getString(2)),
+                                        rs.getString(3)))
+                .list();
+    }
+
+    /** The source version a replay reads the batch with, so its result shows that version. */
+    public void recordSourceVersion(String batchId, int sourceVersion) {
+        jdbc.sql("UPDATE ingestion_batch SET source_version=:v WHERE batch_id=:b")
+                .param("v", sourceVersion)
+                .param("b", batchId)
+                .update();
+    }
+
     public void markStatus(String batchId, BatchStatus status, String detail) {
         jdbc.sql("UPDATE ingestion_batch SET status=:s, status_detail=:d WHERE batch_id=:b")
                 .param("s", status.name())
@@ -112,12 +147,16 @@ public class BatchRepository {
             long accepted,
             long quarantined,
             long duplicates) {
-        // a replay that completes again clears failures recorded by the previous attempt
-        jdbc.sql("DELETE FROM downstream_rejection WHERE batch_id=:b").param("b", batchId).update();
+        // Records are published chunk by chunk before this runs, so the normalizer may already have
+        // rejected some of them: keep those rejections (a replay clears the previous attempt's
+        // when it starts, see clearRejections) and let them mark the batch.
         jdbc.sql(
                         """
-                        UPDATE ingestion_batch SET status=:s, status_detail=:d, received=:r, accepted=:a,
-                               quarantined=:q, duplicates=:dup, rejected_downstream=0, completed_at=now() WHERE batch_id=:b
+                        UPDATE ingestion_batch SET status = CASE
+                                   WHEN rejected_downstream > 0 AND :s IN ('ACCEPTED','ACCEPTED_WITH_QUARANTINE','REPLAYED')
+                                   THEN 'ACCEPTED_WITH_FAILURES' ELSE :s END,
+                               status_detail=:d, received=:r, accepted=:a,
+                               quarantined=:q, duplicates=:dup, completed_at=now() WHERE batch_id=:b
                         """)
                 .param("s", status.name())
                 .param("d", detail)
@@ -319,6 +358,14 @@ public class BatchRepository {
 
     public void clearQuarantine(String batchId) {
         jdbc.sql("DELETE FROM quarantine_entry WHERE batch_id=:b").param("b", batchId).update();
+    }
+
+    /** Before a replay: the previous attempt's downstream failures no longer apply. */
+    public void clearRejections(String batchId) {
+        jdbc.sql("DELETE FROM downstream_rejection WHERE batch_id=:b").param("b", batchId).update();
+        jdbc.sql("UPDATE ingestion_batch SET rejected_downstream=0 WHERE batch_id=:b")
+                .param("b", batchId)
+                .update();
     }
 
     public List<QuarantineEntry> quarantine(String tenantId, String batchId, int limit) {
