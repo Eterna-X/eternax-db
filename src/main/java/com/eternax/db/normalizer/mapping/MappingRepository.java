@@ -5,6 +5,7 @@ import com.eternax.recon.exception.ErrorCode;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -48,6 +49,26 @@ public class MappingRepository {
                 .optional();
     }
 
+    /**
+     * Serialises drafting for one source until the transaction ends, so two identical saves cannot
+     * both create a version. Must run inside a transaction.
+     */
+    public void lockSource(String tenantId, String sourceId) {
+        jdbc.sql("SELECT pg_advisory_xact_lock(hashtext(:k))")
+                .param("k", "map/" + tenantId + "/" + sourceId)
+                .query()
+                .listOfRows();
+    }
+
+    /** Every version of the tenant's own mapping for a source (no platform default). */
+    public List<MappingDefinition> listOwn(String tenantId, String sourceId) {
+        return jdbc.sql(SELECT + " WHERE tenant_id = :t AND source_id = :s")
+                .param("t", tenantId)
+                .param("s", sourceId)
+                .query(this::map)
+                .list();
+    }
+
     /** Stores an inactive draft as the source's next version. */
     @Transactional
     public MappingDefinition insertNextDraft(
@@ -56,10 +77,7 @@ public class MappingRepository {
             String rail,
             List<FieldMapping> mappings,
             String author) {
-        jdbc.sql("SELECT pg_advisory_xact_lock(hashtext(:k))")
-                .param("k", "map/" + tenantId + "/" + sourceId)
-                .query()
-                .listOfRows();
+        lockSource(tenantId, sourceId);
         int next =
                 jdbc.sql(
                                 "SELECT COALESCE(MAX(version), 0) + 1 FROM mapping_definition WHERE"
@@ -100,6 +118,27 @@ public class MappingRepository {
                 .update();
     }
 
+    /** Records who turned the draft down, why and when. */
+    public void markRejected(
+            String tenantId,
+            String sourceId,
+            int version,
+            String rejecter,
+            String reason,
+            Instant at) {
+        jdbc.sql(
+                        "UPDATE mapping_definition SET rejected_by = :by, rejection_reason = :why,"
+                                + " rejected_at = :at WHERE tenant_id = :t AND source_id = :s AND"
+                                + " version = :v")
+                .param("by", rejecter)
+                .param("why", reason)
+                .param("at", java.sql.Timestamp.from(at))
+                .param("t", tenantId)
+                .param("s", sourceId)
+                .param("v", version)
+                .update();
+    }
+
     /** Every version for the tenant and the platform default, tenant's own first. */
     public List<MappingDefinition> history(String tenantId, String sourceId) {
         return jdbc.sql(
@@ -113,11 +152,12 @@ public class MappingRepository {
     }
 
     private static final String SELECT =
-            "SELECT tenant_id, source_id, version, rail, active, field_mappings, created_by FROM"
-                    + " mapping_definition";
+            "SELECT tenant_id, source_id, version, rail, active, field_mappings, created_by,"
+                    + " rejected_by, rejection_reason, rejected_at FROM mapping_definition";
 
     private MappingDefinition map(java.sql.ResultSet rs, int n) throws java.sql.SQLException {
         try {
+            java.sql.Timestamp rejectedAt = rs.getTimestamp(10);
             return new MappingDefinition(
                     rs.getString(1),
                     rs.getString(2),
@@ -125,7 +165,10 @@ public class MappingRepository {
                     rs.getString(4),
                     rs.getBoolean(5),
                     mapper.readValue(rs.getString(6), LIST),
-                    rs.getString(7));
+                    rs.getString(7),
+                    rs.getString(8),
+                    rs.getString(9),
+                    rejectedAt == null ? null : rejectedAt.toInstant());
         } catch (JsonProcessingException e) {
             throw new ConfigurationInvalidException(
                     ErrorCode.INF_8003_CONFIGURATION_INVALID,

@@ -19,7 +19,8 @@ public class DefinitionRepository {
     private static final String COLUMNS =
             "definition_id, version, tenant_id, name, rail, required_sources, wait_window_seconds,"
                 + " composite_window_seconds, amount_tolerance_minor, require_opposite_direction,"
-                + " cron_schedule, time_zone, status, created_by, approved_by, next_run_at, rules";
+                + " cron_schedule, time_zone, status, created_by, approved_by, next_run_at, rules,"
+                + " first_run_at";
 
     private final JdbcClient jdbc;
     private final com.fasterxml.jackson.databind.ObjectMapper mapper;
@@ -35,7 +36,7 @@ public class DefinitionRepository {
                         """
                         INSERT INTO reconciliation_definition (definition_id, version, tenant_id, name, rail, required_sources,
                             wait_window_seconds, composite_window_seconds, amount_tolerance_minor, require_opposite_direction,
-                            cron_schedule, time_zone, status, created_by, rules) VALUES (:id,:v,:t,:n,:r,:src,:w,:c,:tol,:opp,:cron,:tz,:st,:by,:rules)
+                            cron_schedule, time_zone, status, created_by, rules, first_run_at) VALUES (:id,:v,:t,:n,:r,:src,:w,:c,:tol,:opp,:cron,:tz,:st,:by,:rules,:first)
                         """)
                 .param("id", d.definitionId())
                 .param("v", d.version())
@@ -52,6 +53,9 @@ public class DefinitionRepository {
                 .param("st", d.status().name())
                 .param("by", d.createdBy())
                 .param("rules", rulesJson(d.rules()))
+                .param(
+                        "first",
+                        d.firstRunAt() == null ? null : d.firstRunAt().atOffset(ZoneOffset.UTC))
                 .update();
     }
 
@@ -196,7 +200,7 @@ public class DefinitionRepository {
                         "SELECT "
                                 + COLUMNS
                                 + " FROM reconciliation_definition WHERE status='ACTIVE' AND"
-                                + " cron_schedule IS NOT NULL AND next_run_at <= :now ORDER BY"
+                                + " next_run_at IS NOT NULL AND next_run_at <= :now ORDER BY"
                                 + " next_run_at LIMIT :l FOR UPDATE SKIP LOCKED")
                 .param("now", now.atOffset(ZoneOffset.UTC))
                 .param("l", limit)
@@ -216,6 +220,7 @@ public class DefinitionRepository {
 
     private Definition map(ResultSet rs, int n) throws SQLException {
         OffsetDateTime next = rs.getObject(16, OffsetDateTime.class);
+        OffsetDateTime first = rs.getObject(18, OffsetDateTime.class);
         return new Definition(
                 rs.getString(1),
                 rs.getInt(2),
@@ -233,6 +238,7 @@ public class DefinitionRepository {
                 rs.getString(14),
                 rs.getString(15),
                 next == null ? null : next.toInstant(),
-                parseRules(rs.getString(17)));
+                parseRules(rs.getString(17)),
+                first == null ? null : first.toInstant());
     }
 }

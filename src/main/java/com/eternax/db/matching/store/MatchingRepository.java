@@ -29,7 +29,6 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class MatchingRepository {
 
-    private static final ZoneId SOURCE_ZONE = ZoneId.of("Asia/Kolkata");
     private static final String TXN_COLUMNS =
             "transaction_id, tenant_id, rail, source_id, feed_id, record_hash, direction,"
                     + " amount_minor, currency, txn_time, rrn, utr, terminal_id, merchant_id,"
@@ -40,8 +39,21 @@ public class MatchingRepository {
 
     private final JdbcClient jdbc;
 
-    public MatchingRepository(JdbcClient jdbc) {
+    /** The zone a record's calendar day (value date) is read in when the source gives none. */
+    private final ZoneId sourceZone;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public MatchingRepository(
+            JdbcClient jdbc,
+            @org.springframework.beans.factory.annotation.Value(
+                            "${eternax.matching.source-time-zone:Asia/Kolkata}")
+                    String sourceZone) {
         this.jdbc = jdbc;
+        this.sourceZone = ZoneId.of(sourceZone);
+    }
+
+    public MatchingRepository(JdbcClient jdbc) {
+        this(jdbc, "Asia/Kolkata");
     }
 
     /**
@@ -321,7 +333,7 @@ public class MatchingRepository {
                 .param("f", from.atOffset(ZoneOffset.UTC))
                 .param("to", to.atOffset(ZoneOffset.UTC))
                 .param("l", limit)
-                .query(MatchingRepository::transaction)
+                .query(this::transaction)
                 .list();
     }
 
@@ -331,7 +343,7 @@ public class MatchingRepository {
                                 + TXN_COLUMNS
                                 + " FROM canonical_transaction WHERE transaction_id = :id")
                 .param("id", transactionId)
-                .query(MatchingRepository::transaction)
+                .query(this::transaction)
                 .optional();
     }
 
@@ -346,7 +358,7 @@ public class MatchingRepository {
                 .param("t", tenantId)
                 .param("r", rail)
                 .param("k", matchKey)
-                .query(MatchingRepository::transaction)
+                .query(this::transaction)
                 .list();
     }
 
@@ -359,7 +371,7 @@ public class MatchingRepository {
                 .param("t", tenantId)
                 .param("r", rail)
                 .param("k", matchKey)
-                .query(MatchingRepository::transaction)
+                .query(this::transaction)
                 .list();
     }
 
@@ -409,7 +421,7 @@ public class MatchingRepository {
         if (merchantId != null) {
             q = q.param("merch", merchantId);
         }
-        return q.query(MatchingRepository::transaction).list();
+        return q.query(this::transaction).list();
     }
 
     /**
@@ -658,7 +670,7 @@ public class MatchingRepository {
                                 + " transaction_id FROM match_ambiguity_member WHERE"
                                 + " ambiguity_id=:a) ORDER BY source_id, txn_time, transaction_id")
                 .param("a", ambiguityId)
-                .query(MatchingRepository::transaction)
+                .query(this::transaction)
                 .list();
     }
 
@@ -785,6 +797,106 @@ public class MatchingRepository {
                 .optional();
     }
 
+    /** One reconciliation outcome per reference (S-12). */
+    public record ResultRow(
+            String rail,
+            String matchKey,
+            String state,
+            Instant firstSeenAt,
+            Instant deadlineAt,
+            Instant matchedAt,
+            String breakId,
+            long records,
+            long amountMinor,
+            List<String> sources) {}
+
+    public record ResultPage(List<ResultRow> items, long total) {}
+
+    /**
+     * The outcome of each reference, newest first. Every filter is optional; the match key filter
+     * is a literal prefix (no wildcards).
+     */
+    public ResultPage results(
+            String tenantId,
+            String rail,
+            String state,
+            String source,
+            String keyPrefix,
+            Instant from,
+            Instant to,
+            int limit,
+            int offset) {
+        String where =
+                " WHERE c.tenant_id=:t"
+                        + (rail == null ? "" : " AND c.rail=:rail")
+                        + (state == null ? "" : " AND c.state=:state")
+                        + (keyPrefix == null ? "" : " AND starts_with(c.match_key, :prefix)")
+                        + (from == null ? "" : " AND c.first_seen_at >= :from")
+                        + (to == null ? "" : " AND c.first_seen_at < :to")
+                        + (source == null
+                                ? ""
+                                : " AND EXISTS (SELECT 1 FROM canonical_transaction x WHERE"
+                                        + " x.tenant_id=c.tenant_id AND x.rail=c.rail AND"
+                                        + " x.match_key=c.match_key AND x.source_id=:source)");
+        java.util.function.Function<JdbcClient.StatementSpec, JdbcClient.StatementSpec> bind =
+                spec -> {
+                    spec = spec.param("t", tenantId);
+                    if (rail != null) spec = spec.param("rail", rail);
+                    if (state != null) spec = spec.param("state", state);
+                    if (keyPrefix != null) spec = spec.param("prefix", keyPrefix);
+                    if (from != null) spec = spec.param("from", from.atOffset(ZoneOffset.UTC));
+                    if (to != null) spec = spec.param("to", to.atOffset(ZoneOffset.UTC));
+                    if (source != null) spec = spec.param("source", source);
+                    return spec;
+                };
+        long total =
+                bind.apply(jdbc.sql("SELECT count(*) FROM match_cluster c" + where))
+                        .query(Long.class)
+                        .single();
+        List<ResultRow> items =
+                bind.apply(
+                                jdbc.sql(
+                                        "SELECT c.rail, c.match_key, c.state, c.first_seen_at,"
+                                                + " c.deadline_at, c.matched_at, c.break_id,"
+                                                + " (SELECT count(*) FROM canonical_transaction t"
+                                                + "   WHERE t.tenant_id=c.tenant_id AND"
+                                                + " t.rail=c.rail AND t.match_key=c.match_key),"
+                                                + " (SELECT coalesce(max(t.amount_minor),0) FROM"
+                                                + " canonical_transaction t   WHERE"
+                                                + " t.tenant_id=c.tenant_id AND t.rail=c.rail AND"
+                                                + " t.match_key=c.match_key),"
+                                                + " (SELECT string_agg(DISTINCT t.source_id, ',')"
+                                                + " FROM canonical_transaction t   WHERE"
+                                                + " t.tenant_id=c.tenant_id AND t.rail=c.rail AND"
+                                                + " t.match_key=c.match_key)"
+                                                + " FROM match_cluster c"
+                                                + where
+                                                + " ORDER BY c.first_seen_at DESC, c.match_key"
+                                                + " LIMIT :limit OFFSET :offset"))
+                        .param("limit", limit)
+                        .param("offset", offset)
+                        .query(
+                                (rs, n) -> {
+                                    String srcs = rs.getString(10);
+                                    return new ResultRow(
+                                            rs.getString(1),
+                                            rs.getString(2),
+                                            rs.getString(3),
+                                            rs.getObject(4, OffsetDateTime.class).toInstant(),
+                                            rs.getObject(5, OffsetDateTime.class).toInstant(),
+                                            rs.getObject(6, OffsetDateTime.class) == null
+                                                    ? null
+                                                    : rs.getObject(6, OffsetDateTime.class)
+                                                            .toInstant(),
+                                            rs.getString(7),
+                                            rs.getLong(8),
+                                            rs.getLong(9),
+                                            srcs == null ? List.of() : List.of(srcs.split(",")));
+                                })
+                        .list();
+        return new ResultPage(items, total);
+    }
+
     public record Stats(
             long matchedGroups,
             long waitingClusters,
@@ -855,6 +967,157 @@ public class MatchingRepository {
                 .single();
     }
 
+    // ------------------------------------------------------------------ replacing an uploaded file
+
+    /** One record of an uploaded file, as matching holds it. */
+    public record FileRecord(
+            String rail, String matchKey, String reconStatus, Instant transactionTime) {}
+
+    /** The records of one uploaded file: its source and its stored copy (vault location). */
+    private static final String OF_FILE =
+            "SELECT transaction_id FROM canonical_transaction WHERE tenant_id=:t AND source_id=:s"
+                    + " AND vault_location=:v";
+
+    public List<FileRecord> recordsOfFile(String tenantId, String sourceId, String vaultLocation) {
+        return jdbc.sql(
+                        "SELECT rail, match_key, recon_status, txn_time FROM canonical_transaction"
+                                + " WHERE tenant_id=:t AND source_id=:s AND vault_location=:v")
+                .param("t", tenantId)
+                .param("s", sourceId)
+                .param("v", vaultLocation)
+                .query(
+                        (rs, n) ->
+                                new FileRecord(
+                                        rs.getString(1),
+                                        rs.getString(2),
+                                        rs.getString(3),
+                                        rs.getObject(4, OffsetDateTime.class).toInstant()))
+                .list();
+    }
+
+    /** Settlement records (expected/actual) that came from the file. */
+    public long settlementRecordsOfFile(String tenantId, String sourceId, String vaultLocation) {
+        return jdbc.sql(
+                        "SELECT count(*) FROM settlement_record WHERE tenant_id=:t AND source_id=:s"
+                                + " AND vault_location=:v")
+                .param("t", tenantId)
+                .param("s", sourceId)
+                .param("v", vaultLocation)
+                .query(Long.class)
+                .single();
+    }
+
+    /** Open ambiguous matches a person still has to decide that include a record of the file. */
+    public long openAmbiguitiesOfFile(String tenantId, String sourceId, String vaultLocation) {
+        return jdbc.sql(
+                        "SELECT count(DISTINCT a.ambiguity_id) FROM match_ambiguity a JOIN"
+                            + " match_ambiguity_member m ON m.ambiguity_id = a.ambiguity_id WHERE"
+                            + " a.tenant_id=:t AND a.status='OPEN' AND m.transaction_id IN ("
+                                + OF_FILE
+                                + ")")
+                .param("t", tenantId)
+                .param("s", sourceId)
+                .param("v", vaultLocation)
+                .query(Long.class)
+                .single();
+    }
+
+    /**
+     * Takes the file's records out of matching: every match one of them is part of is undone (the
+     * match's other records wait again) and the records are deleted. The caller then re-evaluates
+     * the affected references. Must run inside a transaction.
+     *
+     * @return how many records were withdrawn
+     */
+    public int withdrawFile(String tenantId, String sourceId, String vaultLocation) {
+        List<String> groups =
+                jdbc.sql(
+                                "SELECT DISTINCT match_group_id FROM match_group_allocation WHERE"
+                                        + " transaction_id IN ("
+                                        + OF_FILE
+                                        + ")")
+                        .param("t", tenantId)
+                        .param("s", sourceId)
+                        .param("v", vaultLocation)
+                        .query(String.class)
+                        .list();
+        for (int i = 0; i < groups.size(); i += 500) {
+            List<String> chunk = groups.subList(i, Math.min(groups.size(), i + 500));
+            jdbc.sql(
+                            "UPDATE canonical_transaction SET recon_status='WAITING' WHERE"
+                                    + " recon_status='MATCHED' AND transaction_id IN (SELECT"
+                                    + " transaction_id FROM match_group_allocation WHERE"
+                                    + " match_group_id IN (:g))")
+                    .param("g", chunk)
+                    .update();
+            jdbc.sql("DELETE FROM match_group_allocation WHERE match_group_id IN (:g)")
+                    .param("g", chunk)
+                    .update();
+            jdbc.sql("DELETE FROM match_group WHERE match_group_id IN (:g)")
+                    .param("g", chunk)
+                    .update();
+        }
+        jdbc.sql("DELETE FROM match_ambiguity_member WHERE transaction_id IN (" + OF_FILE + ")")
+                .param("t", tenantId)
+                .param("s", sourceId)
+                .param("v", vaultLocation)
+                .update();
+        return jdbc.sql(
+                        "DELETE FROM canonical_transaction WHERE tenant_id=:t AND source_id=:s AND"
+                                + " vault_location=:v")
+                .param("t", tenantId)
+                .param("s", sourceId)
+                .param("v", vaultLocation)
+                .update();
+    }
+
+    /** Records left for a reference, of any status. */
+    public long recordsWithKey(String tenantId, String rail, String matchKey) {
+        return jdbc.sql(
+                        "SELECT count(*) FROM canonical_transaction WHERE tenant_id=:t AND rail=:r"
+                                + " AND match_key=:k")
+                .param("t", tenantId)
+                .param("r", rail)
+                .param("k", matchKey)
+                .query(Long.class)
+                .single();
+    }
+
+    /** A reference with no records left is forgotten, so its next record starts it afresh. */
+    public void dropCluster(String tenantId, String rail, String matchKey) {
+        jdbc.sql("DELETE FROM match_cluster WHERE tenant_id=:t AND rail=:r AND match_key=:k")
+                .param("t", tenantId)
+                .param("r", rail)
+                .param("k", matchKey)
+                .update();
+    }
+
+    /**
+     * The reference is decided again from scratch under the current definition: it waits for its
+     * window with no break, and its unmatched records wait with it.
+     */
+    public void reopenForReevaluation(
+            String tenantId, String rail, String matchKey, String definitionId, Instant deadline) {
+        jdbc.sql(
+                        "UPDATE match_cluster SET state='WAITING', break_id=NULL, matched_at=NULL,"
+                            + " definition_id=:d, deadline_at=:dl WHERE tenant_id=:t AND rail=:r"
+                            + " AND match_key=:k")
+                .param("d", definitionId)
+                .param("dl", deadline.atOffset(ZoneOffset.UTC))
+                .param("t", tenantId)
+                .param("r", rail)
+                .param("k", matchKey)
+                .update();
+        jdbc.sql(
+                        "UPDATE canonical_transaction SET recon_status='WAITING' WHERE tenant_id=:t"
+                                + " AND rail=:r AND match_key=:k AND recon_status NOT IN"
+                                + " ('MATCHED','PERIOD_LOCKED')")
+                .param("t", tenantId)
+                .param("r", rail)
+                .param("k", matchKey)
+                .update();
+    }
+
     private static ClusterRow cluster(ResultSet rs, int n) throws SQLException {
         return new ClusterRow(
                 rs.getString(1),
@@ -866,9 +1129,9 @@ public class MatchingRepository {
                 rs.getString(7));
     }
 
-    private static CanonicalTransaction transaction(ResultSet rs, int n) throws SQLException {
+    private CanonicalTransaction transaction(ResultSet rs, int n) throws SQLException {
         Instant time = rs.getObject(10, OffsetDateTime.class).toInstant();
-        LocalDate date = LocalDate.ofInstant(time, SOURCE_ZONE);
+        LocalDate date = LocalDate.ofInstant(time, sourceZone);
         return CanonicalTransaction.builder()
                 .transactionId(TypedId.of(rs.getString(1)))
                 .tenantId(TypedId.of(rs.getString(2)))
