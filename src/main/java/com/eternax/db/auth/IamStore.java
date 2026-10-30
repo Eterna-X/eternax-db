@@ -59,6 +59,21 @@ public class IamStore {
 
     public record Revocation(String tenantId, String userId, Instant minIat, Instant updatedAt) {}
 
+    /** A contact row including the encrypted address and the code counters. */
+    public record ContactRow(
+            String contactId,
+            String userId,
+            String channel,
+            String addressCipher,
+            String addressHint,
+            String platform,
+            Instant verifiedAt,
+            Instant optInAt,
+            int codesSent,
+            Instant codesWindowStart,
+            int failedChecks,
+            Instant createdAt) {}
+
     private final JdbcClient jdbc;
     private final ObjectMapper mapper;
     private final DefaultTenantPolicy defaults;
@@ -511,6 +526,115 @@ public class IamStore {
                 .param("x", exceptUserId == null ? "" : exceptUserId)
                 .query(Long.class)
                 .single();
+    }
+
+    // ------------------------------------------------------------------ contacts
+
+    private static final String CONTACT_COLUMNS =
+            "contact_id, user_id, channel, address_cipher, address_hint, platform, verified_at,"
+                    + " opt_in_at, codes_sent, codes_window_start, failed_checks, created_at";
+
+    private static ContactRow contactRow(java.sql.ResultSet rs, int n)
+            throws java.sql.SQLException {
+        return new ContactRow(
+                rs.getString(1),
+                rs.getString(2),
+                rs.getString(3),
+                rs.getString(4),
+                rs.getString(5),
+                rs.getString(6),
+                at(rs.getObject(7, OffsetDateTime.class)),
+                at(rs.getObject(8, OffsetDateTime.class)),
+                rs.getInt(9),
+                at(rs.getObject(10, OffsetDateTime.class)),
+                rs.getInt(11),
+                at(rs.getObject(12, OffsetDateTime.class)));
+    }
+
+    public List<ContactRow> contacts(String tenantId, String userId) {
+        return jdbc.sql(
+                        "SELECT "
+                                + CONTACT_COLUMNS
+                                + " FROM user_contact WHERE tenant_id=:t AND user_id=:u ORDER BY"
+                                + " created_at")
+                .param("t", tenantId)
+                .param("u", userId)
+                .query(IamStore::contactRow)
+                .list();
+    }
+
+    public Optional<ContactRow> contact(String tenantId, String userId, String contactId) {
+        return jdbc.sql(
+                        "SELECT "
+                                + CONTACT_COLUMNS
+                                + " FROM user_contact WHERE tenant_id=:t AND user_id=:u AND"
+                                + " contact_id=:c")
+                .param("t", tenantId)
+                .param("u", userId)
+                .param("c", contactId)
+                .query(IamStore::contactRow)
+                .optional();
+    }
+
+    public void insertContact(
+            String tenantId,
+            String userId,
+            String contactId,
+            String channel,
+            String addressCipher,
+            String addressHash,
+            String addressHint,
+            String platform,
+            Instant verifiedAt) {
+        jdbc.sql(
+                        "INSERT INTO user_contact (contact_id, tenant_id, user_id, channel,"
+                                + " address_cipher, address_hash, address_hint, platform,"
+                                + " verified_at) VALUES (:c,:t,:u,:ch,:ac,:ah,:hi,:p,:v)")
+                .param("c", contactId)
+                .param("t", tenantId)
+                .param("u", userId)
+                .param("ch", channel)
+                .param("ac", addressCipher)
+                .param("ah", addressHash)
+                .param("hi", addressHint)
+                .param("p", platform)
+                .param("v", utc(verifiedAt))
+                .update();
+    }
+
+    /** A new code went out: count it in the window and forget earlier wrong guesses. */
+    public void recordCodeSent(String contactId, int codesSent, Instant windowStart) {
+        jdbc.sql(
+                        "UPDATE user_contact SET codes_sent=:n, codes_window_start=:w,"
+                                + " failed_checks=0 WHERE contact_id=:c")
+                .param("n", codesSent)
+                .param("w", utc(windowStart))
+                .param("c", contactId)
+                .update();
+    }
+
+    public void recordFailedCheck(String contactId) {
+        jdbc.sql("UPDATE user_contact SET failed_checks=failed_checks+1 WHERE contact_id=:c")
+                .param("c", contactId)
+                .update();
+    }
+
+    public void markVerified(String contactId, Instant now) {
+        jdbc.sql("UPDATE user_contact SET verified_at=:v, failed_checks=0 WHERE contact_id=:c")
+                .param("v", utc(now))
+                .param("c", contactId)
+                .update();
+    }
+
+    public void markOptIn(String contactId, Instant now) {
+        jdbc.sql("UPDATE user_contact SET opt_in_at=:o WHERE contact_id=:c AND opt_in_at IS NULL")
+                .param("o", utc(now))
+                .param("c", contactId)
+                .update();
+    }
+
+    public void deleteContact(String contactId) {
+        jdbc.sql("DELETE FROM user_contact WHERE contact_id=:c").param("c", contactId).update();
     }
 
     // ------------------------------------------------------------------ access changes

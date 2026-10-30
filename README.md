@@ -21,7 +21,8 @@ eternax-db/
 │   ├── adjustment/      adjustment-service
 │   ├── audit/           audit-service
 │   ├── closure/         closure-service
-│   └── auth/            eternaX-auth-service
+│   ├── auth/            eternaX-auth-service
+│   └── notification/    notification-service
 ├── src/main/resources/
 │   ├── eternax-db/database.yml     every service's settings (common)
 │   └── db/<database>/              each service's migrations (db/ingestion, db/exceptions, ...)
@@ -41,6 +42,7 @@ eternax-db/
 | `audit` | `AuditEventRepository` (storage only; the hash chain stays in audit-service) | audit-service |
 | `closure` | `ClosureRepository` | closure-service |
 | `auth` | `IamStore` (needs a `DefaultTenantPolicy` bean from auth-service) | eternaX-auth-service |
+| `notification` | `NotificationRepository` (people copy, rules, notifications, delivery queue) | notification-service |
 
 Each service package also holds the row types its repositories return; its Flyway migrations are
 in `src/main/resources/db/<database>`, copied byte for byte from the service.
