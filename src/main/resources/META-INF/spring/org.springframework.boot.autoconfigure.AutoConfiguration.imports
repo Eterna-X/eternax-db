@@ -7,3 +7,4 @@ com.eternax.db.adjustment.AdjustmentDbAutoConfiguration
 com.eternax.db.audit.AuditDbAutoConfiguration
 com.eternax.db.closure.ClosureDbAutoConfiguration
 com.eternax.db.auth.AuthDbAutoConfiguration
+com.eternax.db.notification.NotificationDbAutoConfiguration

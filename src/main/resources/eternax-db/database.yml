@@ -3,8 +3,9 @@
 # At startup DatabaseSettingsLoader looks up the service's spring.application.name below, sets
 # eternax.db.name to its database, and adds this file with the lowest precedence. Everything the
 # service's environment sets (DB_URL, DB_USER, DB_PASSWORD, SPRING_FLYWAY_USER, ...) wins over it.
-# Values come from environment variables (docker-compose locally, Kubernetes secrets in a cluster);
-# the defaults after ':' are for a developer machine only. Never put a real password here.
+# Values come from environment variables (Kubernetes secrets in a cluster, docker-compose) or, on a
+# developer machine, from a git-ignored .env file in the service's folder (see .env.example). The
+# user name and password have no default and no value here: a service without them stops at startup.
 eternax:
   db:
     # spring.application.name -> database (same names as eternasync-deploy/init-databases.sql)
@@ -18,12 +19,14 @@ eternax:
       audit-service: audit
       closure-service: closure
       auth-service: auth
+      notification-service: notifications
 
 spring:
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/${eternax.db.name}}
-    username: ${DB_USER:eternax}
-    password: ${DB_PASSWORD:eternax}
+    # DB_URL wins; otherwise built from DB_HOST, DB_PORT and DB_NAME (the service's own database by default)
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:${eternax.db.name}}}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
     hikari:
       maximum-pool-size: ${DB_POOL_SIZE:20}
       connection-timeout: 5000
