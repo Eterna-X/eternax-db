@@ -65,6 +65,16 @@ public final class Iam {
 
     public record AssignResult(UserView user, ChangeView pendingChange) {}
 
+    /** A phone number, WhatsApp number or push device; the number itself is only ever masked. */
+    public record ContactView(
+            String contactId,
+            String channel,
+            String address,
+            String platform,
+            boolean verified,
+            boolean whatsappConsent,
+            Instant createdAt) {}
+
     /** What a sign-in or refresh returns. */
     public record Session(
             String accessToken,
