@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.3
+## 1.0.0
 - **New:** `notification` package for notification-service: `NotificationRepository` (people copy, contacts, rules, notifications, deliveries, inbox) and `NotificationDbAutoConfiguration` (`@ConditionalOnServiceDatabase("notifications")`).
 - **New:** Flyway migration `db/notifications/V1__notification_schema.sql`: `app_user`, `user_contact`, `notification_rule`, `notification`, `notification_delivery`.
 - `database.yml`: `notification-service` uses the `notifications` database.
@@ -12,7 +12,7 @@
 Testing connection
 
 ## 0.2.1
-Use github env for secrets
+- Use github env for secrets
 
 ## 0.2.0
 - **Breaking:** `spring.datasource.username` and `password` no longer have a default in `database.yml`; a service must set `DB_USER` and `DB_PASSWORD` (environment, Kubernetes secret, docker-compose or `.env`).
