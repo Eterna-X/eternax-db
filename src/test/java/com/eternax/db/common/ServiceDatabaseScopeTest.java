@@ -26,6 +26,8 @@ import com.eternax.db.matching.store.MatchingRepository;
 import com.eternax.db.normalizer.NormalizerDbAutoConfiguration;
 import com.eternax.db.normalizer.deadletter.DltReplayRepository;
 import com.eternax.db.normalizer.mapping.MappingRepository;
+import com.eternax.db.notification.NotificationDbAutoConfiguration;
+import com.eternax.db.notification.NotificationRepository;
 import com.eternax.db.orchestration.OrchestrationDbAutoConfiguration;
 import com.eternax.db.orchestration.definition.DefinitionRepository;
 import com.eternax.db.orchestration.run.RunRepository;
@@ -68,7 +70,9 @@ class ServiceDatabaseScopeTest {
                     "closure",
                     List.of(ClosureRepository.class),
                     "auth",
-                    List.of(IamStore.class));
+                    List.of(IamStore.class),
+                    "notifications",
+                    List.of(NotificationRepository.class));
 
     private final ApplicationContextRunner runner =
             new ApplicationContextRunner()
@@ -82,7 +86,8 @@ class ServiceDatabaseScopeTest {
                                     AdjustmentDbAutoConfiguration.class,
                                     AuditDbAutoConfiguration.class,
                                     ClosureDbAutoConfiguration.class,
-                                    AuthDbAutoConfiguration.class))
+                                    AuthDbAutoConfiguration.class,
+                                    NotificationDbAutoConfiguration.class))
                     .withBean(
                             JdbcClient.class,
                             () -> JdbcClient.create(new DriverManagerDataSource()))
@@ -99,7 +104,8 @@ class ServiceDatabaseScopeTest {
                 "adjustments",
                 "audit",
                 "closure",
-                "auth"
+                "auth",
+                "notifications"
             })
     void aServiceGetsOnlyItsOwnRepositories(String database) {
         ApplicationContextRunner service = runner.withPropertyValues("eternax.db.name=" + database);

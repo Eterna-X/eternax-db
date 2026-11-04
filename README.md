@@ -21,7 +21,8 @@ eternax-db/
 │   ├── adjustment/      adjustment-service
 │   ├── audit/           audit-service
 │   ├── closure/         closure-service
-│   └── auth/            eternaX-auth-service
+│   ├── auth/            eternaX-auth-service
+│   └── notification/    notification-service
 ├── src/main/resources/
 │   ├── eternax-db/database.yml     every service's settings (common)
 │   └── db/<database>/              each service's migrations (db/ingestion, db/exceptions, ...)
@@ -41,6 +42,7 @@ eternax-db/
 | `audit` | `AuditEventRepository` (storage only; the hash chain stays in audit-service) | audit-service |
 | `closure` | `ClosureRepository` | closure-service |
 | `auth` | `IamStore` (needs a `DefaultTenantPolicy` bean from auth-service) | eternaX-auth-service |
+| `notification` | `NotificationRepository` (people copy, rules, notifications, delivery queue) | notification-service |
 
 Each service package also holds the row types its repositories return; its Flyway migrations are
 in `src/main/resources/db/<database>`, copied byte for byte from the service.
@@ -68,10 +70,11 @@ At startup `DatabaseSettingsLoader` looks up the service's name, sets `eternax.d
 database (ingestion-service gets `ingestion`) and adds the file. A service missing from the map
 stops at startup with a message saying where to add it.
 
-The file is the lowest-precedence source. Its values read `DB_URL`, `DB_USER` and `DB_PASSWORD`
-from the environment (docker-compose locally, Kubernetes secrets in a cluster), and anything the
-service sets itself overrides it. The defaults in the file are for a developer machine only; never
-put a real password in it.
+The file is the lowest-precedence source. It holds no user name or password: set `DB_USER` and `DB_PASSWORD` and either `DB_URL` or
+`DB_HOST` / `DB_PORT` / `DB_NAME` (optional; default localhost:5432 and the service's own database) in the environment (docker-compose locally, Kubernetes secrets in a cluster), or on a
+developer machine in a git-ignored `.env` file in the service's folder (copy `.env.example`). Precedence: real
+environment variables, then `.env`, then `database.yml`; anything the service sets itself in its application.yml
+overrides all of them. A service that has no `DB_USER`/`DB_PASSWORD` stops at startup.
 
 ## Adding a service
 
