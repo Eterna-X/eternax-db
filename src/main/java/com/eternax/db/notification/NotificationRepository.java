@@ -175,6 +175,37 @@ public class NotificationRepository {
                 .optional();
     }
 
+    /** True when the copy already holds this person, whatever their status. */
+    public boolean userExists(String userId) {
+        return jdbc.sql("SELECT count(*) FROM app_user WHERE user_id=:u")
+                        .param("u", userId)
+                        .query(Long.class)
+                        .single()
+                > 0;
+    }
+
+    /** One active person by sign-in e-mail, for a notification meant for them alone. */
+    public Optional<Recipient> activeUserByLogin(String tenantId, String login) {
+        return jdbc.sql(
+                        "SELECT user_id, login, display_name FROM app_user WHERE tenant_id=:t AND"
+                                + " lower(login)=:l AND status='ACTIVE'")
+                .param("t", tenantId)
+                .param("l", login.trim().toLowerCase())
+                .query((rs, n) -> new Recipient(rs.getString(1), rs.getString(2), rs.getString(3)))
+                .optional();
+    }
+
+    /** One active person, for a notification meant for them alone. */
+    public Optional<Recipient> activeUser(String tenantId, String userId) {
+        return jdbc.sql(
+                        "SELECT user_id, login, display_name FROM app_user WHERE tenant_id=:t AND"
+                                + " user_id=:u AND status='ACTIVE'")
+                .param("t", tenantId)
+                .param("u", userId)
+                .query((rs, n) -> new Recipient(rs.getString(1), rs.getString(2), rs.getString(3)))
+                .optional();
+    }
+
     // ------------------------------------------------------------------ rules
 
     private static RuleRow ruleRow(ResultSet rs, int n) throws SQLException {
@@ -380,19 +411,22 @@ public class NotificationRepository {
      * Takes up to {@code batch} due deliveries for this instance: one statement locks them with
      * SKIP LOCKED (another instance passes over them) and pushes their due time to the lease end,
      * so if this instance dies they become due again for someone else. Returns them with the
-     * content and recipient needed to send.
+     * content and recipient needed to send. A delivery that already used {@code maxAttempts} is
+     * never claimed again.
      */
-    public List<ClaimedDelivery> claimDue(Instant now, int batch, Instant leaseUntil) {
+    public List<ClaimedDelivery> claimDue(
+            Instant now, int batch, Instant leaseUntil, int maxAttempts) {
         List<String> ids =
                 jdbc.sql(
                                 "WITH due AS (SELECT delivery_id FROM notification_delivery WHERE"
-                                        + " status='PENDING' AND next_attempt_at <= :now ORDER BY"
-                                        + " next_attempt_at LIMIT :b FOR UPDATE SKIP LOCKED) UPDATE"
-                                        + " notification_delivery d SET next_attempt_at=:lease FROM"
-                                        + " due WHERE d.delivery_id=due.delivery_id RETURNING"
-                                        + " d.delivery_id")
+                                        + " status='PENDING' AND next_attempt_at <= :now AND"
+                                        + " attempt_count < :max ORDER BY next_attempt_at LIMIT :b"
+                                        + " FOR UPDATE SKIP LOCKED) UPDATE notification_delivery d"
+                                        + " SET next_attempt_at=:lease FROM due WHERE"
+                                        + " d.delivery_id=due.delivery_id RETURNING d.delivery_id")
                         .param("now", utc(now))
                         .param("b", batch)
+                        .param("max", maxAttempts)
                         .param("lease", utc(leaseUntil))
                         .query(String.class)
                         .list();
@@ -422,12 +456,42 @@ public class NotificationRepository {
                 .list();
     }
 
+    /**
+     * Counts an attempt just before it is sent, in its own commit. If the instance then dies before
+     * the outcome is written, the attempt is still counted, so a crash loop cannot resend forever.
+     * The outcome methods below no longer count.
+     */
+    public void startAttempt(String deliveryId) {
+        jdbc.sql(
+                        "UPDATE notification_delivery SET attempt_count=attempt_count+1 WHERE"
+                                + " delivery_id=:d AND status='PENDING'")
+                .param("d", deliveryId)
+                .update();
+    }
+
+    /**
+     * Gives up on deliveries whose last attempt started but never recorded an outcome (the instance
+     * died, or the outcome could not be written) once no attempts are left. They may or may not
+     * have reached the person; they are not sent again.
+     *
+     * @return how many were given up
+     */
+    public int failAbandoned(Instant now, int maxAttempts) {
+        return jdbc.sql(
+                        "UPDATE notification_delivery SET status='FAILED', next_attempt_at=NULL,"
+                                + " last_error='No outcome recorded for the last attempt; not"
+                                + " sent again' WHERE status='PENDING' AND attempt_count >= :max"
+                                + " AND next_attempt_at <= :now")
+                .param("max", maxAttempts)
+                .param("now", utc(now))
+                .update();
+    }
+
     public void recordSent(String deliveryId, String providerMessageId, Instant now) {
         jdbc.sql(
                         "UPDATE notification_delivery SET status='SENT', sent_at=:s,"
-                                + " provider_message_id=:m, attempt_count=attempt_count+1,"
-                                + " next_attempt_at=NULL, last_error=NULL WHERE delivery_id=:d"
-                                + " AND status='PENDING'")
+                                + " provider_message_id=:m, next_attempt_at=NULL,"
+                                + " last_error=NULL WHERE delivery_id=:d AND status='PENDING'")
                 .param("s", utc(now))
                 .param("m", providerMessageId)
                 .param("d", deliveryId)
@@ -437,9 +501,8 @@ public class NotificationRepository {
     /** Stays PENDING, due again at {@code nextAttemptAt}. */
     public void recordRetry(String deliveryId, Instant nextAttemptAt, String error) {
         jdbc.sql(
-                        "UPDATE notification_delivery SET attempt_count=attempt_count+1,"
-                                + " next_attempt_at=:n, last_error=:e WHERE delivery_id=:d AND"
-                                + " status='PENDING'")
+                        "UPDATE notification_delivery SET next_attempt_at=:n, last_error=:e"
+                                + " WHERE delivery_id=:d AND status='PENDING'")
                 .param("n", utc(nextAttemptAt))
                 .param("e", truncate(error))
                 .param("d", deliveryId)
@@ -448,8 +511,7 @@ public class NotificationRepository {
 
     public void recordFailed(String deliveryId, String error) {
         jdbc.sql(
-                        "UPDATE notification_delivery SET status='FAILED',"
-                                + " attempt_count=attempt_count+1, next_attempt_at=NULL,"
+                        "UPDATE notification_delivery SET status='FAILED', next_attempt_at=NULL,"
                                 + " last_error=:e WHERE delivery_id=:d AND status='PENDING'")
                 .param("e", truncate(error))
                 .param("d", deliveryId)
