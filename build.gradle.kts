@@ -9,7 +9,8 @@ plugins {
     id("com.diffplug.spotless") version "7.2.1"
 }
 
-val eternaxVersion = project.property("eternaxVersion") as String
+val eternaxPlatformVersion = project.property("eternaxPlatformVersion") as String
+val eternaxCoreVersion = project.property("eternaxCoreVersion") as String
 
 repositories {
     if (providers.gradleProperty("useMavenLocal").isPresent) mavenLocal()   // local verification only
@@ -42,14 +43,14 @@ dependencies {
     api("org.springframework.boot:spring-boot-autoconfigure")
     implementation("org.yaml:snakeyaml")
     // every service's repositories
-    api("com.eternax:eternax-core:$eternaxVersion")
+    api("com.eternax:eternax-core:$eternaxCoreVersion")
     api("org.springframework.boot:spring-boot-starter-jdbc")
     api("org.springframework.boot:spring-boot-starter-json")
     runtimeOnly("org.postgresql:postgresql")
     runtimeOnly("org.flywaydb:flyway-core")
     runtimeOnly("org.flywaydb:flyway-database-postgresql")
 
-    testImplementation("com.eternax:eternax-test-support:$eternaxVersion")
+    testImplementation("com.eternax:eternax-test-support:$eternaxPlatformVersion")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
