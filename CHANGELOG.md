@@ -1,6 +1,16 @@
 # Changelog
 
-Semantic versioning. A MAJOR bump changes or removes something a service depends on and is adopted by each service in its own pull request. Add the entry here in the same pull request as the change, then tag `vX.Y.Z` to publish.
+## 0.2.3
+- **New:** `notification` package for notification-service: `NotificationRepository` (people copy, contacts, rules, notifications, deliveries, inbox) and `NotificationDbAutoConfiguration` (`@ConditionalOnServiceDatabase("notifications")`).
+- **New:** Flyway migration `db/notifications/V1__notification_schema.sql`: `app_user`, `user_contact`, `notification_rule`, `notification`, `notification_delivery`.
+- `database.yml`: `notification-service` uses the `notifications` database.
+- Delivery queue: `claimDue` takes `maxAttempts` and never claims a delivery that used them all; `startAttempt` counts an attempt before it is sent; `failAbandoned` gives up deliveries whose last attempt recorded no outcome. `recordSent`, `recordRetry` and `recordFailed` no longer count the attempt.
+- Recipients: `activeUser` and `activeUserByLogin` (case-insensitive) for a notification meant for one person; `userExists`.
+- auth: contacts (phone, WhatsApp, push device) in `IamStore` and `Iam.ContactView`; migration `db/auth/V2__user_contact.sql`. The number is stored encrypted and only ever shown masked.
+
+## 0.2.2
+Testing connection
+
 ## 0.2.1
 Use github env for secrets
 
