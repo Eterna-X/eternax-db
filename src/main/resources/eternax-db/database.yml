@@ -19,6 +19,7 @@ eternax:
       audit-service: audit
       closure-service: closure
       auth-service: auth
+      notification-service: notifications
 
 spring:
   datasource:
